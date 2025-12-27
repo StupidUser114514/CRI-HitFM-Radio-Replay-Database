@@ -32,8 +32,8 @@ def fetch_all_programs(column_id):
         'Accept': 'application/json',
         'platformcode': 'WEB',
         'equipmentid': '0000',
-        'timestamp': '1766843298017',  # 【关键】你可能需要更新此值
-        'sign': 'F30B42030830025FD8377E0ED48C988B',  # 【关键】你可能需要更新此值
+        'timestamp': os.getenv('YT_TIMESTAMP', ''),  # 从环境变量读取
+        'sign': os.getenv('YT_SIGN', ''),            # 从环境变量读取
         'Host': 'ytmsout.radio.cn'
     }
 
