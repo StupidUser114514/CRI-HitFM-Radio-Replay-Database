@@ -1,34 +1,106 @@
-name: Python Package using Conda
+name: One-Time CloudRadio Audio Fetch
 
-on: [push]
+on:
+  workflow_dispatch: # 允许在GitHub Actions页面手动触发此工作流
+    inputs:
+      skip_commit:
+        description: '跳过自动提交音频文件到仓库？'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
-  build-linux:
+  fetch-audio:
     runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 5
+    timeout-minutes: 120 # 设置超时时间为2小时，可根据需要调整
+
+    defaults:
+      run:
+        shell: bash -l {0} # 使用登录式Shell以确保Conda环境可用
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v3
-      with:
-        python-version: '3.10'
-    - name: Add conda to system path
-      run: |
-        # $CONDA is an environment variable pointing to the root of the miniconda directory
-        echo $CONDA/bin >> $GITHUB_PATH
-    - name: Install dependencies
-      run: |
-        conda env update --file environment.yml --name base
-    - name: Lint with flake8
-      run: |
-        conda install flake8
-        # stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-    - name: Test with pytest
-      run: |
-        conda install pytest
-        pytest
+      - name: 1. 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史，便于后续Git操作
+
+      - name: 2. 设置Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          miniconda-version: 'latest'
+          activate-environment: 'radio-fetch'
+          python-version: '3.10'
+
+      - name: 3. 创建Conda环境并安装依赖
+        run: |
+          conda info
+          conda install -n radio-fetch -c conda-forge requests python-dateutil -y
+          # 如果项目有environment.yml或requirements.txt，也可使用：
+          # conda env update -f environment.yml
+          # 或 pip install -r requirements.txt
+
+      - name: 4. 验证环境
+        run: |
+          conda activate radio-fetch
+          python --version
+          python -c "import requests; print(f'Requests版本: {requests.__version__}')"
+
+      - name: 5. 创建音频保存目录
+        run: mkdir -p cloudradio_audio
+
+      - name: 6. 运行一次性抓取脚本
+        env:
+          # 关键：以下敏感信息必须提前在仓库Settings -> Secrets中设置
+          YT_TIMESTAMP: ${{ secrets.YT_TIMESTAMP }}
+          YT_SIGN: ${{ secrets.YT_SIGN }}
+          COLUMN_ID: ${{ secrets.COLUMN_ID }}
+          # 可选：配置保存目录
+          SAVE_DIR: './cloudradio_audio'
+        run: |
+          conda activate radio-fetch
+          echo "开始执行一次性音频抓取任务..."
+          echo "栏目ID: $COLUMN_ID"
+          echo "签名时间戳: $YT_TIMESTAMP"
+          # 运行你的Python脚本，假设脚本名为 one_time_fetch.py
+          python one_time_fetch.py
+          echo "脚本执行完毕。"
+
+      - name: 7. 查看生成的文件（调试用）
+        run: |
+          echo "抓取到的音频文件列表："
+          find ./cloudradio_audio -name "*.mp3" -type f | head -20
+          echo "总计文件数："
+          find ./cloudradio_audio -name "*.mp3" -type f | wc -l
+          echo "目录大小："
+          du -sh ./cloudradio_audio
+
+      - name: 8. 自动提交抓取结果（可选）
+        id: commit_results
+        if: github.event.inputs.skip_commit == 'false'
+        run: |
+          conda activate radio-fetch
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # 检查是否有新文件
+          if git status --porcelain | grep -q "cloudradio_audio/"; then
+            git add cloudradio_audio/
+            git commit -m "Auto: 添加一次性抓取的音频文件 [$(date +'%Y-%m-%d %H:%M')]"
+            git push
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "没有新文件需要提交。"
+            echo "changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 9. 上传音频文件为工作流产物（备用）
+        if: always() # 即使失败也上传，便于调试
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudradio-audio-files
+          path: cloudradio_audio/
+          retention-days: 7 # 产物保留7天
